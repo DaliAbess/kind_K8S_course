@@ -1,0 +1,43 @@
+############################################################################
+#1. Create a Configuration File
+
+#(kind-config.yaml)
+
+
+# kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+- role: worker
+###########################################################################
+#2. Create the Cluster
+docker pull kindest/node:v1.25.2
+
+kind create cluster --name my-multinode-cluster --config kind-config.yaml
+###########################################################################
+#3. Verify the Cluster Nodes
+
+kubectl get nodes
+###########################################################################
+#4. To destroy a kind cluster
+kind delete cluster --name my-multinode-cluster 
+#verify the cluster is gone
+kind get clusters
+
+#EXP###########################################
+#create the deployment nginx
+kubectl apply -f nginx.yml
+##host access 8080 
+kubectl port-forward svc/nginx-project 8080:80
+#or inside VM GCP
+
+
+curl node_ip_master_or_worker:service_port_nginx
+
+##access via browser
+https://<port>-<hostname>.cs-europe-west1-haha.cloudshell.dev/
+
+###delete nginx deployment
+
+kubectl delete -f nginx.yml
