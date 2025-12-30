@@ -1,0 +1,264 @@
+# Kubernetes Lab #8 — Configuring StatefulSets (Persistent Apps)
+
+## 🎯 Goal
+
+- Understand StatefulSets and how they differ from Deployments
+- Deploy a multi-pod stateful app (Nginx or MySQL)
+- Observe stable Pod naming, ordered startup, and persistent storage behavior
+
+## 🧩 Skills
+
+- Stateful applications
+- Persistent Volumes
+- Ordered rollout
+- Pod identity management
+
+## 🧰 Scenario
+
+We'll deploy an Nginx-based StatefulSet to simulate a simple stateful web app.
+
+Each Pod will:
+
+- Have a stable hostname (`web-0`, `web-1`, `web-2`)
+- Get its own PersistentVolumeClaim (PVC)
+- Serve content stored on its individual volume
+
+## Step 1 — Headless Service
+
+### File: `service-stateful.yaml`
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  clusterIP: None
+  selector:
+    app: web
+  ports:
+  - port: 80
+    name: web
+```
+
+### 🧠 Explanation
+
+A headless service (`clusterIP: None`) lets StatefulSet pods get DNS entries like:
+- `web-0.web.default.svc.cluster.local`
+- `web-1.web.default.svc.cluster.local`
+
+### Apply
+
+```bash
+kubectl apply -f service-stateful.yaml
+```
+
+## Step 2 — StatefulSet Definition
+
+### File: `statefulset-nginx.yaml`
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: web
+spec:
+  serviceName: "web"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+          name: web
+        volumeMounts:
+        - name: www
+          mountPath: /usr/share/nginx/html
+  volumeClaimTemplates:
+  - metadata:
+      name: www
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+```
+
+### 🧠 Explanation
+
+- Each Pod (`web-0`, `web-1`, `web-2`) gets a unique PVC named: `www-web-0`, `www-web-1`, `www-web-2`
+- StatefulSet guarantees ordered creation and stable identities
+
+### Apply
+
+```bash
+kubectl apply -f statefulset-nginx.yaml
+```
+
+## Step 3 — Verify Pods and Volumes
+
+### Check pods
+
+```bash
+kubectl get pods -l app=web
+```
+
+Output:
+
+```
+NAME    READY   STATUS    RESTARTS   AGE
+web-0   1/1     Running   0          1m
+web-1   1/1     Running   0          1m
+web-2   1/1     Running   0          1m
+```
+
+### Check PVCs
+
+```bash
+kubectl get pvc
+```
+
+Output:
+
+```
+NAME         STATUS   VOLUME                                     CAPACITY   ACCESS MODES   AGE
+www-web-0    Bound    pvc-abc123                                 1Gi        RWO            1m
+www-web-1    Bound    pvc-def456                                 1Gi        RWO            1m
+www-web-2    Bound    pvc-ghi789                                 1Gi        RWO            1m
+```
+
+## Step 4 — Write Unique Data to Each Pod
+
+Let's simulate data difference across pods:
+
+```bash
+for i in 0 1 2; do
+  kubectl exec web-$i -- sh -c "echo 'Hello from web-$i' > /usr/share/nginx/html/index.html"
+done
+```
+
+### Verify each pod's content
+
+```bash
+for i in 0 1 2; do
+  kubectl exec web-$i -- cat /usr/share/nginx/html/index.html
+done
+```
+
+Output:
+
+```
+Hello from web-0
+Hello from web-1
+Hello from web-2
+```
+
+## Step 5 — Test Stability
+
+Delete one pod and watch what happens:
+
+```bash
+kubectl delete pod web-1
+kubectl get pods -l app=web
+```
+
+You'll see:
+
+```
+web-1   0/1   ContainerCreating   0   3s
+```
+
+After it restarts:
+
+```bash
+kubectl exec web-1 -- cat /usr/share/nginx/html/index.html
+```
+
+✅ It still says:
+
+```
+Hello from web-1
+```
+
+Because the PVC `www-web-1` was retained and reattached.
+
+## Step 6 — Scaling
+
+### Scale up
+
+```bash
+kubectl scale statefulset web --replicas=5
+```
+
+### Check
+
+```bash
+kubectl get pods -l app=web
+```
+
+New pods `web-3` and `web-4` will be created in order.
+
+### Scale down
+
+```bash
+kubectl scale statefulset web --replicas=2
+kubectl get pvc
+```
+
+Even after scaling down, PVCs for `web-3` and `web-4` remain —
+
+🧠 **StatefulSets don't delete PVCs automatically (to prevent data loss).**
+
+## Step 7 — Cleanup
+
+```bash
+kubectl delete statefulset web
+kubectl delete svc web
+kubectl delete pvc -l app=web
+```
+
+## 🧠 Concept Summary
+
+| Feature       | Deployment     | StatefulSet                          |
+|---------------|----------------|--------------------------------------|
+| Pod Identity  | Random         | Stable (web-0, web-1, etc.)          |
+| Startup Order | Parallel       | Ordered                              |
+| Storage       | Shared         | Dedicated per Pod                    |
+| Scaling       | Stateless      | Stateful                             |
+| Use Case      | Web apps, APIs | Databases, Queues, Stateful services |
+
+## 🔧 Real-world Uses
+
+- MySQL, PostgreSQL, Redis, Kafka
+- Elasticsearch, MongoDB
+- Apps that need stable hostnames or persistent data
+
+## ✅ What You've Mastered
+
+- StatefulSet structure and behavior
+- Pod identity & stable networking
+- PVC creation and retention per replica
+- Ordered scaling and restart recovery
+
+## 📚 Key Concepts
+
+**Stable Network Identity**: Each pod gets a persistent hostname that stays the same across restarts
+
+**Ordered Deployment**: Pods are created sequentially (web-0 before web-1, etc.)
+
+**Ordered Termination**: Pods are deleted in reverse order during scale-down
+
+**Persistent Storage**: Each pod maintains its own dedicated PVC that survives pod deletion
+
+**StatefulSet Use Cases**:
+- Databases requiring stable network identities
+- Applications needing ordered, graceful deployment and scaling
+- Services requiring persistent storage tied to pod identity
