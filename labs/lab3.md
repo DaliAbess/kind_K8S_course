@@ -277,15 +277,41 @@ env:
 ### Method 2: Volume Mounts (File-based)
 
 ```yaml
-volumes:
-- name: config-volume
-  configMap:
-    name: app-config
-containers:
-- name: config-demo
-  volumeMounts:
-  - name: config-volume
-    mountPath: /etc/config
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-demo-volumes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-demo
+  template:
+    metadata:
+      labels:
+        app: config-demo
+    spec:
+      containers:
+      - name: config-demo
+        image: <your-dockerhub-user>/config-demo:v1
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        # Mount ConfigMap as files
+        - name: config-data
+          mountPath: /etc/config
+          readOnly: true
+        # Mount Secrets as files
+        - name: secret-data
+          mountPath: /etc/secrets
+          readOnly: true
+      volumes:
+      - name: config-data
+        configMap:
+          name: app-config
+      - name: secret-data
+        secret:
+          secretName: app-secret
 ```
 
 Access files at `/etc/config/APP_ENV`, `/etc/config/DB_HOST`, etc.
@@ -293,11 +319,32 @@ Access files at `/etc/config/APP_ENV`, `/etc/config/DB_HOST`, etc.
 ### Method 3: envFrom (All Keys at Once)
 
 ```yaml
-envFrom:
-- configMapRef:
-    name: app-config
-- secretRef:
-    name: app-secret
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-demo-envfrom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-demo
+  template:
+    metadata:
+      labels:
+        app: config-demo
+    spec:
+      containers:
+      - name: config-demo
+        image: <your-dockerhub-user>/config-demo:v1
+        ports:
+        - containerPort: 8080
+        envFrom:
+        # Pulls all keys from app-config
+        - configMapRef:
+            name: app-config
+        # Pulls all keys from app-secret
+        - secretRef:
+            name: app-secret
 ```
 
 All keys from ConfigMap and Secret become environment variables automatically.
