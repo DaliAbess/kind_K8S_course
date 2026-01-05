@@ -22,9 +22,13 @@ We'll deploy a simple CPU-intensive Node.js app and apply various requests/limit
 ### File: `cpu-app.js`
 
 ```javascript
+
 const express = require('express');
 const app = express();
 const port = 8080;
+
+// Global array to simulate memory usage
+const memoryLoad = [];
 
 // Endpoint to simulate CPU load
 app.get('/load', (req, res) => {
@@ -35,9 +39,22 @@ app.get('/load', (req, res) => {
   res.send('CPU load simulated for 10 seconds!');
 });
 
-app.get('/', (req, res) => res.send('Hello from CPU test app!'));
+// Endpoint to simulate memory load
+app.get('/memload', (req, res) => {
+  // Allocate ~10MB per request
+  const size = 10 * 1024 * 1024 / 8; // Number of floats
+  for (let i = 0; i < size; i++) {
+    memoryLoad.push(Math.random());
+  }
+  res.send(`Allocated more memory! Current array length: ${memoryLoad.length}`);
+});
 
+// Root endpoint
+app.get('/', (req, res) => res.send('Hello from CPU + Memory test app!'));
+
+// Start server
 app.listen(port, () => console.log(`App running on port ${port}`));
+
 ```
 
 ### File: `Dockerfile`
@@ -183,7 +200,7 @@ kubectl rollout restart deployment cpu-demo
 ### Simulate load repeatedly
 
 ```bash
-for i in {1..5}; do curl http://<NodeIP>:<NodePort>/load; done
+for i in {1..5}; do curl http://<NodeIP>:<NodePort>/memload; done
 ```
 
 ### Inspect the results
