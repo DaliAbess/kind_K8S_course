@@ -139,6 +139,20 @@ curl http://<NodeIP>:<NodePort>/load
 While load runs, open another terminal:
 
 ```bash
+
+#Install Metrics Server
+#1.Install Metrics Server
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+#2.Patch Metrics Server (REQUIRED on Killercoda)
+kubectl patch deployment metrics-server -n kube-system \
+  --type=json \
+  -p='[
+    {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}
+  ]'
+#3.Wait until it’s running
+kubectl get pods -n kube-system | grep metrics
+
+#################
 kubectl top pod -l app=cpu-demo
 ```
 
