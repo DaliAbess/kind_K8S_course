@@ -1,5 +1,146 @@
 # Kubernetes Lab #8 — Configuring StatefulSets (Persistent Apps)
 
+## 📖 What are StatefulSets?
+
+StatefulSets are Kubernetes workload resources designed for applications that require:
+- **Stable, unique network identifiers** - Each pod gets a predictable name
+- **Stable, persistent storage** - Each pod maintains its own dedicated storage
+- **Ordered deployment and scaling** - Pods are created and terminated in a specific sequence
+- **Ordered, automated rolling updates** - Updates happen one pod at a time in order
+
+### StatefulSets vs Deployments
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         DEPLOYMENT                               │
+├─────────────────────────────────────────────────────────────────┤
+│  Pod Names: Random (web-7d8f9-x4k2p, web-7d8f9-9mn3q)          │
+│  Storage: Shared across pods or no storage                      │
+│  Startup: All pods start simultaneously                         │
+│  Use Case: Stateless applications (web servers, APIs)          │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                       STATEFULSET                                │
+├─────────────────────────────────────────────────────────────────┤
+│  Pod Names: Predictable (web-0, web-1, web-2)                  │
+│  Storage: Dedicated PVC per pod (www-web-0, www-web-1)         │
+│  Startup: Sequential (web-0 → web-1 → web-2)                   │
+│  Use Case: Stateful applications (databases, message queues)    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Pod Identity & Stable Networking
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                   Headless Service: web                       │
+│                   (clusterIP: None)                          │
+└────────────┬──────────────┬──────────────┬──────────────────┘
+             │              │              │
+             ▼              ▼              ▼
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │   web-0     │ │   web-1     │ │   web-2     │
+    │             │ │             │ │             │
+    │ DNS: web-0  │ │ DNS: web-1  │ │ DNS: web-2  │
+    │ .web.default│ │ .web.default│ │ .web.default│
+    │ .svc.cluster│ │ .svc.cluster│ │ .svc.cluster│
+    │ .local      │ │ .local      │ │ .local      │
+    └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+           │                │                │
+           ▼                ▼                ▼
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │ PVC:        │ │ PVC:        │ │ PVC:        │
+    │ www-web-0   │ │ www-web-1   │ │ www-web-2   │
+    │ (1Gi)       │ │ (1Gi)       │ │ (1Gi)       │
+    └─────────────┘ └─────────────┘ └─────────────┘
+```
+
+### Ordered Deployment & Scaling
+
+**Scale Up (replicas: 0 → 3):**
+```
+Time 0:  [Creating web-0...]
+         ↓
+Time 1:  [web-0: Running] → [Creating web-1...]
+         ↓
+Time 2:  [web-0: Running] [web-1: Running] → [Creating web-2...]
+         ↓
+Time 3:  [web-0: Running] [web-1: Running] [web-2: Running] ✓
+```
+
+**Scale Down (replicas: 3 → 1):**
+```
+Time 0:  [web-0: Running] [web-1: Running] [web-2: Running]
+         ↓
+Time 1:  [web-0: Running] [web-1: Running] [Terminating web-2...]
+         ↓
+Time 2:  [web-0: Running] [Terminating web-1...]
+         ↓
+Time 3:  [web-0: Running] ✓
+
+Note: PVCs www-web-1 and www-web-2 are retained!
+```
+
+### Persistent Storage Behavior
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Scenario: Pod web-1 crashes or is deleted                   │
+└─────────────────────────────────────────────────────────────┘
+
+Before:
+  web-1 (Running) ──attached to──> www-web-1 PVC
+                                   ├─ data.db
+                                   └─ logs/
+
+After deletion:
+  [web-1 deleted]                  www-web-1 PVC (RETAINED!)
+                                   ├─ data.db
+                                   └─ logs/
+
+After recreation:
+  web-1 (Running) ──reattached──>  www-web-1 PVC
+                                   ├─ data.db (PRESERVED!)
+                                   └─ logs/ (PRESERVED!)
+```
+
+### StatefulSet Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                      StatefulSet Controller                     │
+│  - Manages pod lifecycle                                       │
+│  - Ensures ordering guarantees                                 │
+│  - Maintains stable identities                                 │
+└────────────┬───────────────────────────────────────────────────┘
+             │
+             │ Creates & Manages
+             ▼
+┌────────────────────────────────────────────────────────────────┐
+│  Pods with Stable Identity                                     │
+│                                                                 │
+│  web-0                web-1                web-2               │
+│  ├─ hostname: web-0   ├─ hostname: web-1   ├─ hostname: web-2 │
+│  ├─ DNS name          ├─ DNS name          ├─ DNS name        │
+│  ├─ ordinal: 0        ├─ ordinal: 1        ├─ ordinal: 2      │
+│  └─ PVC: www-web-0    └─ PVC: www-web-1    └─ PVC: www-web-2  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Common Use Cases
+
+| Application Type | Why StatefulSet? |
+|-----------------|------------------|
+| **MySQL/PostgreSQL** | Requires stable network identity for replication, persistent data storage |
+| **MongoDB** | Replica sets need stable hostnames, persistent storage for data |
+| **Redis Cluster** | Nodes need stable identities for cluster formation |
+| **Kafka** | Brokers need stable IDs and persistent message storage |
+| **Elasticsearch** | Nodes need stable identities for cluster membership |
+| **ZooKeeper** | Ensemble members need stable network identities |
+
+---
+
 ## 🎯 Goal
 
 - Understand StatefulSets and how they differ from Deployments
