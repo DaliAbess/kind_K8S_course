@@ -1,5 +1,297 @@
 # Kubernetes Lab #7 — Persistent Volumes & Claims (Storage Management)
 
+## 📖 What are Persistent Volumes (PV) and Persistent Volume Claims (PVC)?
+
+Kubernetes storage follows a separation of concerns model where administrators provision storage resources and users consume them without needing to know infrastructure details.
+
+### The Problem Without Persistent Storage
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Pod Lifecycle WITHOUT Persistent Storage               │
+│                                                          │
+│  Pod Created → Data Written → Pod Deleted → Data LOST   │
+│                                                          │
+│  Every restart = Fresh start = No data persistence      │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Example:** A database Pod crashes and restarts → all data is gone! 💥
+
+### The Solution: Persistent Volumes
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Pod Lifecycle WITH Persistent Storage                   │
+│                                                           │
+│  PV Created → PVC Binds → Pod Uses → Pod Deleted →       │
+│  PV Still Exists → New Pod → Mounts Same PV → Data ✓    │
+│                                                           │
+│  Data survives Pod restarts and deletions                │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Key Concepts
+
+**PersistentVolume (PV)**
+- A piece of storage in the cluster provisioned by an administrator
+- Exists independently of any Pod
+- Has its own lifecycle separate from Pods
+- Think of it as: "Real storage capacity available in the cluster"
+
+**PersistentVolumeClaim (PVC)**
+- A request for storage by a user/Pod
+- Binds to a matching PV
+- Pods use PVCs to access storage
+- Think of it as: "A ticket to claim storage"
+
+**The Relationship:**
+
+```
+Administrator              User/Developer
+     │                          │
+     │ 1. Provisions            │ 2. Requests
+     ↓                          ↓
+┌─────────┐                ┌─────────┐
+│   PV    │ ←── Binds ───→ │   PVC   │
+│ (Supply)│                │ (Demand)│
+└─────────┘                └────┬────┘
+                                │ 3. Uses
+                                ↓
+                           ┌─────────┐
+                           │   Pod   │
+                           └─────────┘
+```
+
+### Complete Storage Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    Kubernetes Cluster                           │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────┐     │
+│  │              Control Plane                            │     │
+│  │  ┌────────────────────────────────────────┐         │     │
+│  │  │  PV Controller                          │         │     │
+│  │  │  - Watches PV and PVC resources         │         │     │
+│  │  │  - Binds PVCs to matching PVs           │         │     │
+│  │  │  - Manages volume lifecycle             │         │     │
+│  │  └────────────────────────────────────────┘         │     │
+│  └──────────────────────────────────────────────────────┘     │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────┐     │
+│  │              Worker Node                              │     │
+│  │                                                       │     │
+│  │  ┌────────────────────────────────┐                  │     │
+│  │  │  Pod: nginx-pv-demo            │                  │     │
+│  │  │  ┌──────────────────────────┐  │                  │     │
+│  │  │  │  Container: nginx        │  │                  │     │
+│  │  │  │  ┌────────────────────┐  │  │                  │     │
+│  │  │  │  │ /usr/share/nginx/  │  │  │                  │     │
+│  │  │  │  │       html/        │  │  │                  │     │
+│  │  │  │  └─────────┬──────────┘  │  │                  │     │
+│  │  │  │            │ mounted      │  │                  │     │
+│  │  │  └────────────┼─────────────┘  │                  │     │
+│  │  │               │                 │                  │     │
+│  │  │               ↓                 │                  │     │
+│  │  │  ┌────────────────────────┐    │                  │     │
+│  │  │  │  PVC: pvc-demo         │    │                  │     │
+│  │  │  │  Status: Bound         │    │                  │     │
+│  │  │  └────────────┬───────────┘    │                  │     │
+│  │  │               │ claims          │                  │     │
+│  │  └───────────────┼─────────────────┘                  │     │
+│  │                  │                                     │     │
+│  │                  ↓                                     │     │
+│  │  ┌────────────────────────────────────────┐           │     │
+│  │  │  PV: pv-demo                           │           │     │
+│  │  │  Capacity: 1Gi                         │           │     │
+│  │  │  Access: ReadWriteOnce                 │           │     │
+│  │  │  Reclaim: Retain                       │           │     │
+│  │  └──────────────┬─────────────────────────┘           │     │
+│  │                 │ backed by                            │     │
+│  │                 ↓                                      │     │
+│  │  ┌────────────────────────────────────────┐           │     │
+│  │  │  Physical Storage: /mnt/data           │           │     │
+│  │  │  (hostPath in this example)            │           │     │
+│  │  └────────────────────────────────────────┘           │     │
+│  └──────────────────────────────────────────────────────┘     │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### PV/PVC Binding Process
+
+```
+Step 1: Admin Creates PV
+┌────────────────────┐
+│   PV: pv-demo      │
+│   Capacity: 1Gi    │
+│   Status: Available│
+└────────────────────┘
+
+Step 2: User Creates PVC
+┌────────────────────┐
+│   PVC: pvc-demo    │
+│   Requests: 1Gi    │
+│   Status: Pending  │
+└────────────────────┘
+
+Step 3: Binding (Automatic)
+┌────────────────────┐          ┌────────────────────┐
+│   PV: pv-demo      │ ←─Bind─→ │   PVC: pvc-demo    │
+│   Capacity: 1Gi    │          │   Requests: 1Gi    │
+│   Status: Bound    │          │   Status: Bound    │
+└────────────────────┘          └────────────────────┘
+
+Step 4: Pod Uses PVC
+                    ┌────────────────────┐
+                    │   Pod              │
+                    │   Mounts: pvc-demo │
+                    └─────────┬──────────┘
+                              │
+                              ↓ (uses)
+                    ┌────────────────────┐
+                    │   PVC: pvc-demo    │
+                    └────────────────────┘
+```
+
+### Access Modes Explained
+
+```
+ReadWriteOnce (RWO) - Most Common
+┌─────────┐
+│ Node A  │ ✓ Can mount (read/write)
+└─────────┘
+┌─────────┐
+│ Node B  │ ✗ Cannot mount (already mounted on Node A)
+└─────────┘
+
+ReadOnlyMany (ROX)
+┌─────────┐
+│ Node A  │ ✓ Can mount (read-only)
+└─────────┘
+┌─────────┐
+│ Node B  │ ✓ Can mount (read-only)
+└─────────┘
+
+ReadWriteMany (RWX) - Requires Network Storage
+┌─────────┐
+│ Node A  │ ✓ Can mount (read/write)
+└─────────┘
+┌─────────┐
+│ Node B  │ ✓ Can mount (read/write)
+└─────────┘
+```
+
+### Storage Lifecycle
+
+```
+┌─────────────┐
+│ Provisioning│ ← Admin creates PV or uses StorageClass
+└──────┬──────┘
+       ↓
+┌─────────────┐
+│   Binding   │ ← User creates PVC, automatically binds to PV
+└──────┬──────┘
+       ↓
+┌─────────────┐
+│    Using    │ ← Pod mounts PVC and reads/writes data
+└──────┬──────┘
+       ↓
+┌─────────────┐
+│  Releasing  │ ← PVC is deleted, PV becomes "Released"
+└──────┬──────┘
+       ↓
+┌─────────────┐
+│  Reclaiming │ ← Based on reclaimPolicy:
+└─────────────┘   - Retain: Manual cleanup
+                  - Delete: Auto-delete PV and storage
+                  - Recycle: Wipe and reuse (deprecated)
+```
+
+### Reclaim Policies Comparison
+
+| Policy | What Happens | Use Case |
+|--------|-------------|----------|
+| **Retain** | PV kept, data preserved, manual cleanup needed | Production data, need manual review before deletion |
+| **Delete** | PV and underlying storage auto-deleted | Dynamic provisioning, temporary data |
+| **Recycle** | Data wiped, PV reused (deprecated) | Legacy systems only |
+
+### Static vs Dynamic Provisioning
+
+**Static Provisioning (This Lab):**
+```
+1. Admin manually creates PV
+2. User creates PVC
+3. PVC binds to existing PV
+4. Pod uses PVC
+
+Manual, pre-provisioned storage
+```
+
+**Dynamic Provisioning (Production):**
+```
+1. Admin creates StorageClass
+2. User creates PVC with storageClassName
+3. PV automatically created by StorageClass
+4. Pod uses PVC
+
+Automatic, on-demand storage
+```
+
+### Common Storage Backends
+
+**Local (Development)**
+- `hostPath`: Node's local filesystem
+- `emptyDir`: Temporary, deleted with Pod
+
+**Cloud (Production)**
+- AWS: EBS (Elastic Block Store)
+- GCP: Persistent Disk
+- Azure: Disk Storage
+
+**Network Storage**
+- NFS (Network File System)
+- Ceph / CephFS
+- GlusterFS
+- iSCSI
+
+### Real-World Example: Database
+
+```
+Without PV/PVC:                  With PV/PVC:
+┌──────────┐                    ┌──────────┐
+│ Postgres │                    │ Postgres │
+│   Pod    │                    │   Pod    │
+└────┬─────┘                    └────┬─────┘
+     │                                │
+     ↓                                ↓
+┌─────────┐                      ┌─────────┐
+│ No Data │  ← Deleted           │   PVC   │
+└─────────┘                      └────┬────┘
+                                      │
+Data Lost! 💥                         ↓
+                                 ┌─────────┐
+                                 │   PV    │
+                                 └────┬────┘
+                                      │
+                                      ↓
+                                 ┌─────────┐
+                                 │  Disk   │
+                                 └─────────┘
+                                 
+                                 Data Persists! ✓
+```
+
+### Why PV/PVC Pattern?
+
+✅ **Separation of Concerns**: Admins manage infrastructure, users consume resources  
+✅ **Portability**: Abstract storage details from application  
+✅ **Flexibility**: Easy to change storage backend without changing Pod specs  
+✅ **Reusability**: Multiple Pods can use the same PVC (depending on access mode)  
+✅ **Data Protection**: Explicit lifecycle management prevents accidental data loss
+
+---
+
 ## 🎯 Goal
 
 - Understand how PersistentVolume (PV) and PersistentVolumeClaim (PVC) work
@@ -195,6 +487,7 @@ kubectl delete pv pv-demo
 - Persistent data across Pod lifecycles
 - Reclaim and reuse storage resources
 - Volume mounting and data verification
+- Understanding storage binding and lifecycle
 
 ## 📚 Key Concepts
 
